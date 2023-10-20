@@ -1,8 +1,8 @@
 /**************************************************************
-* Class:  CSC-415-0# Spring 2023
-* Name:
-* Student ID:
-* GitHub UserID:
+* Class:  CSC-415-03 Fall 2023
+* Name: Juan Estrada
+* Student ID: 923058731
+* GitHub ID: jjestrada2
 * Project: Assignment 5 – Buffered I/O
 *
 * File: b_io.c
@@ -28,10 +28,14 @@
 typedef struct b_fcb
 	{
 	fileInfo * fi;	//holds the low level systems file info
+	char* buffer;
+	int byteRead;
 
 	// Add any other needed variables here to track the individual open file
 
-
+	//char fileInfo->fileName[64];		//filename
+	//int fileInfo->fileSize;			//file size in bytes
+	//int fileInfo->location;			//starting lba (block number) for the file data
 
 	} b_fcb;
 	
@@ -85,8 +89,19 @@ b_io_fd b_open (char * filename, int flags)
 	//*** TODO ***//  Write open function to return your file descriptor
 	//				  You may want to allocate the buffer here as well
 	//				  But make sure every file has its own buffer
+	b_io_fd indxFil = b_getFCB();
+	if(indxFil < 0)return -1;
+	fileInfo* get_fi = GetFileInfo(filename);
 
+	//Look for a place in my fcbArray to allocate  my FCB
+	fcbArray[indxFil].fi = get_fi;
+	
+	//allocate buffer for the respective file
+	fcbArray[indxFil].buffer =  malloc(B_CHUNK_SIZE);
 	// This is where you are going to want to call GetFileInfo and b_getFCB
+	fcbArray[indxFil].byteRead = 0;
+	
+	return indxFil;
 	}
 
 
@@ -117,8 +132,74 @@ int b_read (b_io_fd fd, char * buffer, int count)
 		return -1;
 		}	
 
-	// Your Read code here - the only function you call to get data is LBAread.
-	// Track which byte in the buffer you are at, and which block in the file	
+	//Check if I dont have to fetch anything to the buffer
+	if(count <= 0) return count;
+
+	//If I am in the last block to finish reading the file
+	if(fcbArray[fd].byteRead + count > fcbArray[fd].fi->fileSize){
+		count = fcbArray[fd].fi->fileSize - fcbArray[fd].byteRead;
+	}
+
+	//keep track of the bytes already in the buffer
+	int bytesCopied = 0;
+
+	//LBAread() read block to my inerbuffer
+	int currBlock = fcbArray[fd].fi->location + fcbArray[fd].byteRead / B_CHUNK_SIZE;
+	char * offset = fcbArray[fd].buffer + fcbArray[fd].byteRead % B_CHUNK_SIZE;
+	int spaceLeftInBlock = B_CHUNK_SIZE - fcbArray[fd].byteRead % B_CHUNK_SIZE;
+
+	LBAread(fcbArray[fd].buffer,1,currBlock);
+	
+	//If there's space left in the current block 
+	
+	if(spaceLeftInBlock!= 0){
+		if(count < spaceLeftInBlock){
+			memcpy(buffer, offset, count);
+			bytesCopied += count;
+			fcbArray[fd].byteRead += count; 
+			return count;
+		}else{
+			/*The else statement run when the number of bytes 
+			that I need to read is larger than the current block
+			I finish to procces all the bytes outside the else statement*/
+			memcpy(buffer,offset , spaceLeftInBlock);
+			bytesCopied += spaceLeftInBlock;
+			fcbArray[fd].byteRead += spaceLeftInBlock;
+		}
+
+		
+	}
+
+	/*Now that the block where I left the last read is done 
+	I need to keep copying data to the userBuffer by chuncks of 512
+	if (count - bytesCopied ) > B_CHUNCK that means I can fill out 
+	in one block in one time */
+
+	while(count - bytesCopied > B_CHUNK_SIZE){
+		currBlock = fcbArray[fd].fi->location + fcbArray[fd].byteRead / B_CHUNK_SIZE; 
+		offset = fcbArray[fd].buffer + fcbArray[fd].byteRead % B_CHUNK_SIZE;
+
+		LBAread(fcbArray[fd].buffer,1,currBlock);
+		memcpy(buffer,offset,B_CHUNK_SIZE);
+
+		bytesCopied += B_CHUNK_SIZE;
+		fcbArray[fd].byteRead += B_CHUNK_SIZE;
+	}
+
+	/*Finally I need to read very last block of data if any left*/
+	if(bytesCopied == count) return bytesCopied;
+	currBlock = fcbArray[fd].fi->location + fcbArray[fd].byteRead / B_CHUNK_SIZE; 
+	offset = fcbArray[fd].buffer + fcbArray[fd].byteRead % B_CHUNK_SIZE;
+	
+	LBAread(fcbArray[fd].buffer,1,currBlock);
+	memcpy(buffer,offset,count - bytesCopied);
+
+	fcbArray[fd].byteRead += count - bytesCopied;
+	bytesCopied += count - bytesCopied; 
+
+
+	return bytesCopied;
+	
 	}
 	
 
@@ -128,5 +209,7 @@ int b_read (b_io_fd fd, char * buffer, int count)
 int b_close (b_io_fd fd)
 	{
 	//*** TODO ***//  Release any resources
+	free(fcbArray[fd].buffer);
+	fcbArray[fd].buffer = NULL;
 	}
 	
